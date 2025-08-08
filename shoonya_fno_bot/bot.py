@@ -353,7 +353,7 @@ def main() -> None:
                     if trade_segment == 'EQ':
                         prev_high = float(highs[-2])
                         prev_low = float(lows[-2])
-                        computed_qty = (prev_high - prev_low) * 100.0
+                        computed_qty = (prev_high - prev_low) / 100.0
                         # round to nearest integer and ensure at least 1
                         qty = int(max(1, round(computed_qty)))
                     else:
