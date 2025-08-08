@@ -9,25 +9,26 @@ import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
-import pandas as pd
 import pytz
 from dateutil import tz
 from dotenv import load_dotenv
 
-# Try both available wrappers to improve portability
+# Try multiple available wrappers to improve portability
 ApiClass = None
 _api_import_error = None
 try:
-    # Newer OAuth-based package
     from NorenRestApi.NorenApi import NorenApi as ApiClass  # type: ignore
 except Exception as e1:
     _api_import_error = e1
     try:
-        # Legacy helper side-load pattern
-        from api_helper import ShoonyaApiPy as ApiClass  # type: ignore
+        from NorenRestApiPy.NorenApi import NorenApi as ApiClass  # type: ignore
     except Exception as e2:
         _api_import_error = (e1, e2)
-        ApiClass = None
+        try:
+            from api_helper import ShoonyaApiPy as ApiClass  # type: ignore
+        except Exception as e3:
+            _api_import_error = (e1, e2, e3)
+            ApiClass = None
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -50,9 +51,15 @@ class ShoonyaClient:
     def __init__(self) -> None:
         if ApiClass is None:
             raise ImportError(
-                f"Shoonya API import failed. Tried NorenRestApi.NorenApi and api_helper.ShoonyaApiPy. Errors: {_api_import_error}"
+                f"Shoonya API import failed. Tried NorenRestApi.NorenApi, NorenRestApiPy.NorenApi, api_helper.ShoonyaApiPy. Errors: {_api_import_error}"
             )
-        self.api = ApiClass()
+        host = os.getenv("SHOONYA_HOST", "https://api.shoonya.com/NorenWClient/" )
+        ws   = os.getenv("SHOONYA_WEBSOCKET", "wss://api.shoonya.com/NorenWSTp/" )
+        try:
+            self.api = ApiClass(host, ws)
+        except TypeError:
+            # Some variants accept keywords
+            self.api = ApiClass(host=host, websocket=ws)
         self.uid: Optional[str] = None
         self.account_id: Optional[str] = None
 
@@ -98,12 +105,11 @@ class ShoonyaClient:
             return res
         return None
 
-    def get_5m_candles_today(self, exch: str, token: str) -> pd.DataFrame:
+    def get_5m_candles_today(self, exch: str, token: str) -> List[Dict]:
         # From 09:15 IST today till now
         today = now_ist().date()
         start_dt = IST.localize(datetime(today.year, today.month, today.day, 9, 15, 0))
         end_dt = now_ist()
-        # API expects epoch milliseconds or formatted string depending on wrapper; try both
         start_epoch = int(start_dt.timestamp())
         end_epoch = int(end_dt.timestamp())
 
@@ -117,12 +123,9 @@ class ShoonyaClient:
             raise RuntimeError(f"get_time_price_series failed for {exch}:{token} => {ret}")
 
         rows = ret.get("candles") or ret.get("values") or []
-        # Expected row format: ["YYYY-MM-DD HH:MM:SS", o, h, l, c, v]
-        cols = ["time", "open", "high", "low", "close", "volume"]
-        df = pd.DataFrame(rows, columns=cols[:len(rows[0])] if rows else cols)
-        # Parse timestamp robustly
+        candles: List[Dict] = []
+
         def parse_ts(x: str) -> datetime:
-            # Shoonya often returns IST-like local timestamps; treat as naive IST
             try:
                 dt = datetime.strptime(str(x), "%Y-%m-%d %H:%M:%S")
             except Exception:
@@ -132,13 +135,19 @@ class ShoonyaClient:
                     dt = datetime.fromtimestamp(int(x), tz=IST).replace(tzinfo=None)
             return IST.localize(dt)
 
-        if not df.empty:
-            df["time"] = df["time"].apply(parse_ts)
-            for col in ["open", "high", "low", "close", "volume"]:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors="coerce")
-            df = df.dropna().reset_index(drop=True)
-        return df
+        for r in rows:
+            # Expected [time, o, h, l, c, v]
+            if len(r) < 5:
+                continue
+            t = parse_ts(r[0])
+            o = float(r[1])
+            h = float(r[2])
+            l = float(r[3])
+            c = float(r[4])
+            v = float(r[5]) if len(r) > 5 and r[5] is not None else 0.0
+            candles.append({"time": t, "open": o, "high": h, "low": l, "close": c, "volume": v})
+
+        return candles
 
     # --- Orders ---
     def place_market_buy(self, exch: str, tsym: str, qty: int, prd: str, remarks: str = "") -> Dict:
@@ -150,82 +159,69 @@ class ShoonyaClient:
         )
 
 
-def compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
-    delta = close.diff()
-    gain = (delta.where(delta > 0, 0.0)).rolling(window=period, min_periods=period).mean()
-    loss = (-delta.where(delta < 0, 0.0)).rolling(window=period, min_periods=period).mean()
-    rs = gain / loss.replace(0, 1e-12)
-    rsi = 100 - (100 / (1 + rs))
+# --- Technical indicators on lists ---
+
+def latest_rsi_two_ago(closes: List[float], period: int = 14) -> Optional[float]:
+    n = len(closes)
+    if n < period + 3:
+        return None
+    # Compute RSI for the third last point using window ending at index n-3
+    end_idx = n - 3
+    start_idx = end_idx - period
+    window = closes[start_idx:end_idx+1]
+    deltas = [window[i] - window[i-1] for i in range(1, len(window))]
+    gains = [d if d > 0 else 0.0 for d in deltas]
+    losses = [-d if d < 0 else 0.0 for d in deltas]
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    rsi = 100.0 - (100.0 / (1.0 + rs))
     return rsi
 
 
-def compute_williams_r(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
-    highest_high = high.rolling(window=period, min_periods=period).max()
-    lowest_low = low.rolling(window=period, min_periods=period).min()
-    wr = -100 * (highest_high - close) / (highest_high - lowest_low + 1e-12)
-    return wr
+def wr_values_for_indices(highs: List[float], lows: List[float], closes: List[float], idx_list: List[int], period: int = 14) -> Dict[int, Optional[float]]:
+    result: Dict[int, Optional[float]] = {}
+    for idx in idx_list:
+        if idx - period + 1 < 0:
+            result[idx] = None
+            continue
+        window_high = max(highs[idx - period + 1: idx + 1])
+        window_low = min(lows[idx - period + 1: idx + 1])
+        denom = (window_high - window_low)
+        if denom <= 0:
+            result[idx] = None
+        else:
+            result[idx] = -100.0 * (window_high - closes[idx]) / denom
+    return result
 
 
-def find_nearest_month_fut(client: ShoonyaClient, underlying: str) -> Optional[Tuple[str, str, Dict]]:
-    # Search in NFO for FUT contract tokens for the underlying
-    candidates = client.search('NFO', underlying + ' FUT')
-    if not candidates:
-        candidates = client.search('NFO', underlying)
-    best = None
-    best_info = None
-    for c in candidates:
-        exch = c.get('exch', 'NFO')
-        token = c.get('token')
-        tsym = c.get('tsym')
-        if not token or not tsym:
-            continue
-        info = client.get_security_info(exch, token)
-        if not info:
-            continue
-        # Filter only stock futures
-        inst = (info.get('instname') or '').upper()
-        if 'FUT' not in inst:
-            continue
-        # Parse expiry date 'exd' in DD-MMM-YYYY or DD-MM-YYYY
-        exd = info.get('exd') or info.get('exdate') or ''
-        try:
-            try:
-                expiry = datetime.strptime(exd, '%d-%b-%Y')
-            except Exception:
-                expiry = datetime.strptime(exd, '%d-%m-%Y')
-        except Exception:
-            # fallback: very large date
-            expiry = datetime.max
-        # choose nearest future expiry in future (>= today)
-        if expiry.date() < now_ist().date():
-            continue
-        if best is None or expiry < best:
-            best = expiry
-            best_info = (exch, tsym, info)
-    return best_info
-
-
-def condition_prev_low_equals_todays_low(df: pd.DataFrame, tick_size: float) -> bool:
-    if df.shape[0] < 20:
+def condition_prev_low_equals_todays_low(lows: List[float], tick_size: float) -> bool:
+    if len(lows) < 2:
         return False
-    # Use last fully closed bar as prev (index -2)
-    prev_low = float(df['low'].iloc[-2])
-    today_low = float(df['low'].min())
+    prev_low = float(lows[-2])
+    today_low = float(min(lows))
     return abs(prev_low - today_low) <= max(tick_size, 1e-6)
 
 
-def condition_wr_crossed_up(df: pd.DataFrame) -> bool:
-    wr = compute_williams_r(df['high'], df['low'], df['close'], period=14)
-    if wr.shape[0] < 3 or pd.isna(wr.iloc[-2]) or pd.isna(wr.iloc[-3]):
+def condition_wr_crossed_up(highs: List[float], lows: List[float], closes: List[float]) -> bool:
+    n = len(closes)
+    if n < 3 + 14:
         return False
-    return (wr.iloc[-3] < -80) and (wr.iloc[-2] > -80)
+    idx_prev = n - 2  # one bar ago
+    idx_two = n - 3   # two bars ago
+    wrs = wr_values_for_indices(highs, lows, closes, [idx_two, idx_prev], period=14)
+    w_two = wrs.get(idx_two)
+    w_prev = wrs.get(idx_prev)
+    if w_two is None or w_prev is None:
+        return False
+    return (w_two < -80.0) and (w_prev > -80.0)
 
 
-def condition_rsi_two_ago_below_20(df: pd.DataFrame) -> bool:
-    rsi = compute_rsi(df['close'], period=14)
-    if rsi.shape[0] < 3 or pd.isna(rsi.iloc[-3]):
-        return False
-    return rsi.iloc[-3] < 20
+def condition_rsi_two_ago_below_20(closes: List[float]) -> bool:
+    r = latest_rsi_two_ago(closes, period=14)
+    return (r is not None) and (r < 20.0)
 
 
 def main() -> None:
@@ -242,7 +238,12 @@ def main() -> None:
     poll_interval = int(os.getenv('POLL_INTERVAL_SEC', '20'))
 
     client = ShoonyaClient()
-    client.login()
+    try:
+        client.login()
+    except Exception as e:
+        print(f"Login failed: {e}")
+        print("Please ensure you set SHOONYA_VENDOR_CODE, SHOONYA_IMEI, and either SHOONYA_TOTP_SECRET or SHOONYA_OTP in .env")
+        sys.exit(1)
 
     try:
         # Resolve contracts
@@ -255,7 +256,6 @@ def main() -> None:
             exch, tsym, info = res
             info['exch'] = exch
             info['tsym'] = tsym
-            # Lot size and tick size fallbacks
             lot_size = int((info.get('ls') or info.get('lotsize') or 1))
             tick_size = float((info.get('ti') or info.get('tick_size') or 0.05))
             info['lot_size'] = lot_size
@@ -283,7 +283,6 @@ def main() -> None:
                 exch = info['exch']
                 tsym = info['tsym']
                 token = info.get('token') or info.get('tkn') or info.get('tokenno')
-                # If token not retained from info, reacquire via search
                 if not token:
                     vals = client.search(exch, tsym)
                     if vals:
@@ -293,23 +292,28 @@ def main() -> None:
                     continue
 
                 try:
-                    df = client.get_5m_candles_today(exch, token)
+                    candles = client.get_5m_candles_today(exch, token)
                 except Exception as e:
                     print(f"{sym}: candle fetch error: {e}")
                     continue
-                if df.empty or df.shape[0] < 20:
+                if len(candles) < 20:
                     continue
 
-                # Ensure we act once per new bar
-                prev_bar_ts: datetime = df['time'].iloc[-2].to_pydatetime()
+                times = [c['time'] for c in candles]
+                opens = [c['open'] for c in candles]
+                highs = [c['high'] for c in candles]
+                lows = [c['low'] for c in candles]
+                closes = [c['close'] for c in candles]
+
+                # last fully closed bar time
+                prev_bar_ts: datetime = times[-2]
                 if last_bar_time.get(sym) and last_bar_time[sym] >= prev_bar_ts:
                     continue
 
-                # Evaluate conditions
                 tick = float(info.get('tick_size', 0.05))
-                c1 = condition_prev_low_equals_todays_low(df, tick)
-                c2 = condition_wr_crossed_up(df)
-                c3 = condition_rsi_two_ago_below_20(df)
+                c1 = condition_prev_low_equals_todays_low(lows, tick)
+                c2 = condition_wr_crossed_up(highs, lows, closes)
+                c3 = condition_rsi_two_ago_below_20(closes)
                 if c1 and c2 and c3:
                     lot = int(info.get('lot_size', 1))
                     qty = max(lot * lots_per_order, lot)
@@ -330,6 +334,42 @@ def main() -> None:
     finally:
         client.logout()
         print('Logged out.')
+
+
+# --- Contract resolver ---
+
+def find_nearest_month_fut(client: ShoonyaClient, underlying: str) -> Optional[Tuple[str, str, Dict]]:
+    candidates = client.search('NFO', underlying + ' FUT')
+    if not candidates:
+        candidates = client.search('NFO', underlying)
+    best = None
+    best_info = None
+    for c in candidates:
+        exch = c.get('exch', 'NFO')
+        token = c.get('token')
+        tsym = c.get('tsym')
+        if not token or not tsym:
+            continue
+        info = client.get_security_info(exch, token)
+        if not info:
+            continue
+        inst = (info.get('instname') or '').upper()
+        if 'FUT' not in inst:
+            continue
+        exd = info.get('exd') or info.get('exdate') or ''
+        try:
+            try:
+                expiry = datetime.strptime(exd, '%d-%b-%Y')
+            except Exception:
+                expiry = datetime.strptime(exd, '%d-%m-%Y')
+        except Exception:
+            expiry = datetime.max
+        if expiry.date() < now_ist().date():
+            continue
+        if best is None or expiry < best:
+            best = expiry
+            best_info = (exch, tsym, info)
+    return best_info
 
 
 if __name__ == '__main__':
