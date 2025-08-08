@@ -298,12 +298,20 @@ def main() -> None:
         last_bar_time: Dict[str, datetime] = {}
         bought_today: Dict[str, bool] = {s: False for s in contracts}
 
-        market_close = now_ist().replace(hour=15, minute=30, second=0, microsecond=0)
-        if now_ist() > market_close:
-            print('Market closed. Exiting.')
+        # Trading window: 09:35 to 15:10 IST
+        trading_start = now_ist().replace(hour=9, minute=35, second=0, microsecond=0)
+        trading_end = now_ist().replace(hour=15, minute=10, second=0, microsecond=0)
+        current_time = now_ist()
+        if current_time >= trading_end:
+            print('Outside trading window (post 15:10). Exiting.')
             return
+        if current_time < trading_start:
+            wait_sec = (trading_start - current_time).total_seconds()
+            print(f"Waiting until 09:35 IST to start (~{int(wait_sec)}s)...")
+            while now_ist() < trading_start:
+                time.sleep(5)
 
-        while now_ist() < market_close:
+        while now_ist() < trading_end:
             for sym, info in contracts.items():
                 if once_per_day and bought_today.get(sym):
                     continue
