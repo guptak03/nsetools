@@ -302,8 +302,7 @@ def main() -> None:
 
     watchlist = [s.strip().upper() for s in os.getenv('WATCHLIST', '').split(',') if s.strip()]
     if not watchlist:
-        print('WATCHLIST env is empty. Example: WATCHLIST=RELIANCE, HDFCBANK, TCS')
-        sys.exit(1)
+        raise RuntimeError('WATCHLIST env is empty. Example: WATCHLIST=RELIANCE, HDFCBANK, TCS')
 
     product_type = os.getenv('PRODUCT_TYPE', 'I').upper()
     trade_segment = os.getenv('TRADE_SEGMENT', 'EQ').upper()
@@ -316,9 +315,7 @@ def main() -> None:
     try:
         client.login()
     except Exception as e:
-        print(f"Login failed: {e}")
-        print("Please ensure you set SHOONYA_VENDOR_CODE, SHOONYA_IMEI, and either SHOONYA_TOTP_SECRET or SHOONYA_OTP in .env")
-        sys.exit(1)
+        raise RuntimeError(f"Login failed: {e}. Ensure vendor/device or OAuth is configured.")
 
     try:
         # Resolve contracts
@@ -536,4 +533,12 @@ def find_nearest_month_fut(client: ShoonyaClient, underlying: str) -> Optional[T
 
 
 if __name__ == '__main__':
-    main()
+    while True:
+        try:
+            print('[Supervisor] Starting trading session...')
+            main()
+            print('[Supervisor] Session finished (likely post 15:10 IST).')
+        except Exception as e:
+            print(f"[Supervisor] Error: {e}")
+        print('[Supervisor] Sleeping 5 minutes before next check...')
+        time.sleep(300)
