@@ -591,10 +591,36 @@ def find_nearest_month_fut(client: ShoonyaClient, underlying: str) -> Optional[T
 if __name__ == '__main__':
     while True:
         try:
+            now = now_ist()
+            # If weekend or after 15:15, sleep until next weekday 09:30 IST
+            after_close = now.replace(hour=15, minute=15, second=0, microsecond=0)
+            if now.weekday() >= 5 or now >= after_close:
+                # compute next weekday 09:30
+                wake = now
+                # move to next day if already past 15:15
+                if now >= after_close:
+                    wake = wake + timedelta(days=1)
+                # advance to weekday
+                while wake.weekday() >= 5:
+                    wake = wake + timedelta(days=1)
+                wake = wake.replace(hour=9, minute=30, second=0, microsecond=0)
+                sleep_sec = max(1, int((wake - now_ist()).total_seconds()))
+                print(f"[Supervisor] Outside hours. Sleeping until {wake.strftime('%a %d %b %Y %H:%M:%S %Z')} (~{sleep_sec}s)...")
+                time.sleep(sleep_sec)
+                continue
+
+            # If before 09:30, wait until 09:30
+            market_wake = now.replace(hour=9, minute=30, second=0, microsecond=0)
+            if now < market_wake:
+                sleep_sec = max(1, int((market_wake - now_ist()).total_seconds()))
+                print(f"[Supervisor] Pre-open. Sleeping until 09:30 IST (~{sleep_sec}s)...")
+                time.sleep(sleep_sec)
+                continue
+
             print('[Supervisor] Starting trading session...')
             main()
             print('[Supervisor] Session finished (likely post 15:10 IST).')
         except Exception as e:
             print(f"[Supervisor] Error: {e}")
-        print('[Supervisor] Sleeping 30 seconds before next check...')
-        time.sleep(30)
+            print('[Supervisor] Sleeping 30 seconds before retry...')
+            time.sleep(30)
