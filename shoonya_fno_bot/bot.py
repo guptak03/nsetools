@@ -17,25 +17,13 @@ from dotenv import load_dotenv
 ApiClass = None
 _api_import_error = None
 try:
-    from NorenRestApi.NorenApi import NorenApi as ApiClass  # type: ignore
-except Exception as e1:
-    _api_import_error = e1
-    try:
-        from NorenRestApiPy.NorenApi import NorenApi as ApiClass  # type: ignore
-    except Exception as e2:
-        _api_import_error = (e1, e2)
-        try:
-            from api_helper import ShoonyaApiPy as ApiClass  # type: ignore
-        except Exception as e3:
-            _api_import_error = (e1, e2, e3)
-            ApiClass = None
+    from api_helper import ShoonyaApiPy as ApiClass  # type: ignore
+except Exception as e:
+    _api_import_error = e
+    ApiClass = None
 
-# Optional OAuth helpers
+# Optional OAuth helpers (not used when local helper is present)
 OAuthApiClass = None
-try:
-    from NorenRestApiPy.api_helper import NorenApi as OAuthApiClass  # type: ignore
-except Exception:
-    pass
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -60,13 +48,8 @@ class ShoonyaClient:
             raise ImportError(
                 f"Shoonya API import failed. Tried NorenRestApi.NorenApi, NorenRestApiPy.NorenApi, api_helper.ShoonyaApiPy. Errors: {_api_import_error}"
             )
-        host = os.getenv("SHOONYA_HOST", "https://api.shoonya.com/NorenWClient/" )
-        ws   = os.getenv("SHOONYA_WEBSOCKET", "wss://api.shoonya.com/NorenWSTp/" )
-        try:
-            self.api = ApiClass(host, ws)
-        except TypeError:
-            # Some variants accept keywords
-            self.api = ApiClass(host=host, websocket=ws)
+        host = os.getenv("SHOONYA_HOST", "https://api.shoonya.com/NorenWClient/")
+        self.api = ApiClass(host)
         self.uid: Optional[str] = None
         self.account_id: Optional[str] = None
 
@@ -89,7 +72,7 @@ class ShoonyaClient:
             raise RuntimeError("Provide either SHOONYA_TOTP_SECRET or one-time SHOONYA_OTP in env")
 
         # Try OAuth path first if provided
-        if oauth_url and secret_key and app_key and OAuthApiClass is not None:
+        if False and oauth_url and secret_key and app_key and OAuthApiClass is not None:
             try:
                 oauth_api = OAuthApiClass()
                 if not auth_code:
