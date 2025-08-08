@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pytz
 from dateutil import tz
-from dotenv import load_dotenv
+# .env loading is disabled for security; use OS environment variables
 
 # Try multiple available wrappers to improve portability
 ApiClass = None
@@ -312,8 +312,6 @@ def print_trades_table(trades: Dict[str, Dict]) -> None:
 
 
 def main() -> None:
-    load_dotenv()
-
     watchlist = [s.strip().upper() for s in os.getenv('WATCHLIST', '').split(',') if s.strip()]
     if not watchlist:
         raise RuntimeError('WATCHLIST env is empty. Example: WATCHLIST=RELIANCE, HDFCBANK, TCS')
