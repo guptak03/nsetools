@@ -323,7 +323,7 @@ def main() -> None:
     qty_per_order = int(os.getenv('QUANTITY_PER_ORDER', '10'))
     lots_per_order = int(os.getenv('LOTS_PER_ORDER', '1'))
     once_per_day = os.getenv('ONCE_PER_DAY', 'true').lower() == 'true'
-    poll_interval = int(os.getenv('POLL_INTERVAL_SEC', '20'))
+    poll_interval = int(os.getenv('POLL_INTERVAL_SEC', '1'))
 
     client = ShoonyaClient()
     try:
