@@ -302,7 +302,7 @@ def print_trades_table(trades: Dict[str, Dict]) -> None:
         print("No trades yet.")
         return
     header = (
-        f"{'SYMBOL':<16}{'QTY':>8}{'ENTRY':>12}{'TARGET':>12}{'STOP':>12}"
+        f"{'SYMBOL':<12}{'QTY':>6}{'ENTRY':>12}{'TARGET':>12}{'STOP':>12}"
         f"{'TGT PTS':>12}{'SL PTS':>12}{'STATUS':>12}{'EXIT':>12}{'P&L PTS':>12}{'P&L AMT':>12}"
     )
     print("\n" + header)
@@ -321,7 +321,7 @@ def print_trades_table(trades: Dict[str, Dict]) -> None:
         def fmt(x):
             return f"{x:.2f}" if isinstance(x, (int, float)) and x is not None else ("-" if x is None else str(x))
         line = (
-            f"{sym:<16}{qty:>8}{fmt(entry):>12}{fmt(target):>12}{fmt(stop):>12}"
+            f"{sym:<12}{qty:>6}{fmt(entry):>12}{fmt(target):>12}{fmt(stop):>12}"
             f"{fmt(tgt_pts):>12}{fmt(sl_pts):>12}{status:>12}{fmt(exitp):>12}{fmt(pnl):>12}{fmt(pnl_amt):>12}"
         )
         print(line)
