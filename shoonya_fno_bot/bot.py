@@ -596,5 +596,5 @@ if __name__ == '__main__':
             print('[Supervisor] Session finished (likely post 15:10 IST).')
         except Exception as e:
             print(f"[Supervisor] Error: {e}")
-        print('[Supervisor] Sleeping 5 minutes before next check...')
-        time.sleep(300)
+        print('[Supervisor] Sleeping 30 seconds before next check...')
+        time.sleep(30)
