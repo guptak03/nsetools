@@ -301,7 +301,10 @@ def print_trades_table(trades: Dict[str, Dict]) -> None:
     if not trades:
         print("No trades yet.")
         return
-    header = f"{'SYMBOL':<14}{'QTY':>6}{'ENTRY':>12}{'TARGET':>12}{'STOP':>12}{'STATUS':>12}{'EXIT':>12}{'P&L':>10}{'P&L AMT':>12}"
+    header = (
+        f"{'SYMBOL':<14}{'QTY':>6}{'ENTRY':>12}{'TARGET':>12}{'STOP':>12}"
+        f"{'TGT PTS':>10}{'SL PTS':>10}{'STATUS':>12}{'EXIT':>12}{'P&L PTS':>10}{'P&L AMT':>12}"
+    )
     print("\n" + header)
     print("-" * len(header))
     for sym, t in trades.items():
@@ -309,13 +312,18 @@ def print_trades_table(trades: Dict[str, Dict]) -> None:
         entry = t.get('entry_price')
         target = t.get('target_price')
         stop = t.get('stop_price')
+        tgt_pts = t.get('tgt_pts')
+        sl_pts = t.get('sl_pts')
         status = t.get('status', 'OPEN')
         exitp = t.get('exit_price')
         pnl = t.get('pnl')
         pnl_amt = t.get('pnl_amount')
         def fmt(x):
             return f"{x:.2f}" if isinstance(x, (int, float)) and x is not None else ("-" if x is None else str(x))
-        line = f"{sym:<14}{qty:>6}{fmt(entry):>12}{fmt(target):>12}{fmt(stop):>12}{status:>12}{fmt(exitp):>12}{fmt(pnl):>10}{fmt(pnl_amt):>12}"
+        line = (
+            f"{sym:<14}{qty:>6}{fmt(entry):>12}{fmt(target):>12}{fmt(stop):>12}"
+            f"{fmt(tgt_pts):>10}{fmt(sl_pts):>10}{status:>12}{fmt(exitp):>12}{fmt(pnl):>10}{fmt(pnl_amt):>12}"
+        )
         print(line)
     print()
 
@@ -478,6 +486,8 @@ def main() -> None:
                                 'entry_price': entry_price,
                                 'target_price': entry_price * 1.01,
                                 'stop_price': baseline_day_low,
+                                'tgt_pts': (entry_price * 1.01) - entry_price,
+                                'sl_pts': entry_price - baseline_day_low,
                                 'status': 'OPEN',
                                 'exit_price': None,
                                 'pnl': None,
