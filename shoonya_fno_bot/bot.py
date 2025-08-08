@@ -71,16 +71,33 @@ class ShoonyaClient:
         imei = os.getenv("SHOONYA_IMEI")
         totp_secret = os.getenv("SHOONYA_TOTP_SECRET", "").strip()
 
-        if not all([uid, pwd, vc, app_key, imei]):
-            raise RuntimeError("Missing one or more required envs: SHOONYA_USER, SHOONYA_PASSWORD, SHOONYA_VENDOR_CODE, SHOONYA_API_KEY, SHOONYA_IMEI")
+        if not uid or not pwd:
+            raise RuntimeError("Missing SHOONYA_USER or SHOONYA_PASSWORD")
 
         twoFA = totp_now(totp_secret) if totp_secret else os.getenv("SHOONYA_OTP")
         if not twoFA:
             raise RuntimeError("Provide either SHOONYA_TOTP_SECRET or one-time SHOONYA_OTP in env")
 
-        ret = self.api.login(userid=uid, password=pwd, twoFA=twoFA, vendor_code=vc, api_secret=app_key, imei=imei)
+        # Try multiple signatures depending on what's available
+        attempts = []
+        if vc and app_key and imei:
+            attempts.append(dict(userid=uid, password=pwd, twoFA=twoFA, vendor_code=vc, api_secret=app_key, imei=imei))
+        if app_key:
+            attempts.append(dict(userid=uid, password=pwd, twoFA=twoFA, api_secret=app_key))
+        attempts.append(dict(userid=uid, password=pwd, twoFA=twoFA))
+
+        last_err = None
+        ret = None
+        for params in attempts:
+            try:
+                ret = self.api.login(**params)
+                if ret and ret.get("stat") == "Ok":
+                    break
+            except Exception as e:
+                last_err = e
+                ret = None
         if not ret or ret.get("stat") != "Ok":
-            raise RuntimeError(f"Login failed: {ret}")
+            raise RuntimeError(f"Login failed: {ret or last_err}")
 
         self.uid = uid
         self.account_id = ret.get("actid") or ret.get("actid", uid)
