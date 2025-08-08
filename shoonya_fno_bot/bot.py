@@ -297,6 +297,29 @@ def condition_rsi_two_ago_below_20(closes: List[float]) -> bool:
     return (r is not None) and (r < 20.0)
 
 
+def print_trades_table(trades: Dict[str, Dict]) -> None:
+    if not trades:
+        print("No trades yet.")
+        return
+    header = f"{'SYMBOL':<14}{'QTY':>6}{'ENTRY':>12}{'TARGET':>12}{'STOP':>12}{'STATUS':>12}{'EXIT':>12}{'P&L':>10}{'P&L AMT':>12}"
+    print("\n" + header)
+    print("-" * len(header))
+    for sym, t in trades.items():
+        qty = t.get('qty', 0)
+        entry = t.get('entry_price')
+        target = t.get('target_price')
+        stop = t.get('stop_price')
+        status = t.get('status', 'OPEN')
+        exitp = t.get('exit_price')
+        pnl = t.get('pnl')
+        pnl_amt = t.get('pnl_amount')
+        def fmt(x):
+            return f"{x:.2f}" if isinstance(x, (int, float)) and x is not None else ("-" if x is None else str(x))
+        line = f"{sym:<14}{qty:>6}{fmt(entry):>12}{fmt(target):>12}{fmt(stop):>12}{status:>12}{fmt(exitp):>12}{fmt(pnl):>10}{fmt(pnl_amt):>12}"
+        print(line)
+    print()
+
+
 def main() -> None:
     load_dotenv()
 
@@ -368,6 +391,7 @@ def main() -> None:
         last_bar_time: Dict[str, datetime] = {}
         bought_today: Dict[str, bool] = {s: False for s in contracts}
         open_positions: Dict[str, Dict] = {}
+        trade_log: Dict[str, Dict] = {}
 
         # Trading window: 09:45 to 15:10 IST
         trading_start = now_ist().replace(hour=9, minute=45, second=0, microsecond=0)
@@ -448,6 +472,18 @@ def main() -> None:
                                 'tsym': tsym,
                                 'token': token,
                             }
+                            # Log trade and print table
+                            trade_log[sym] = {
+                                'qty': qty,
+                                'entry_price': entry_price,
+                                'target_price': entry_price * 1.01,
+                                'stop_price': baseline_day_low,
+                                'status': 'OPEN',
+                                'exit_price': None,
+                                'pnl': None,
+                                'pnl_amount': None,
+                            }
+                            print_trades_table(trade_log)
                         else:
                             print(f"Order Failed: {order}")
                     except Exception as e:
@@ -470,6 +506,15 @@ def main() -> None:
                             if exit_order and exit_order.get('stat') == 'Ok':
                                 print(f"{sym}: TP hit. Sold qty={pos['qty']} at ~{ltp:.2f}")
                                 bought_today[sym] = True
+                                # Update trade log
+                                pnl_per_sh = float(ltp) - entry
+                                amount = pnl_per_sh * pos['qty']
+                                if sym in trade_log:
+                                    trade_log[sym]['status'] = 'CLOSED TP'
+                                    trade_log[sym]['exit_price'] = float(ltp)
+                                    trade_log[sym]['pnl'] = pnl_per_sh
+                                    trade_log[sym]['pnl_amount'] = amount
+                                    print_trades_table(trade_log)
                                 del open_positions[sym]
                                 continue
                             else:
@@ -483,6 +528,15 @@ def main() -> None:
                             if exit_order and exit_order.get('stat') == 'Ok':
                                 print(f"{sym}: New day low. SL exit qty={pos['qty']} at ~{ltp:.2f}")
                                 bought_today[sym] = True
+                                # Update trade log
+                                pnl_per_sh = float(ltp) - entry
+                                amount = pnl_per_sh * pos['qty']
+                                if sym in trade_log:
+                                    trade_log[sym]['status'] = 'CLOSED SL'
+                                    trade_log[sym]['exit_price'] = float(ltp)
+                                    trade_log[sym]['pnl'] = pnl_per_sh
+                                    trade_log[sym]['pnl_amount'] = amount
+                                    print_trades_table(trade_log)
                                 del open_positions[sym]
                             else:
                                 print(f"{sym}: SL exit failed: {exit_order}")
