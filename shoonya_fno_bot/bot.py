@@ -343,7 +343,11 @@ def main() -> None:
                 c3 = condition_rsi_two_ago_below_20(closes)
                 if c1 and c2 and c3:
                     if trade_segment == 'EQ':
-                        qty = max(qty_per_order, 1)
+                        prev_high = float(highs[-2])
+                        prev_low = float(lows[-2])
+                        computed_qty = (prev_high - prev_low) * 100.0
+                        # round to nearest integer and ensure at least 1
+                        qty = int(max(1, round(computed_qty)))
                     else:
                         lot = int(info.get('lot_size', 1))
                         qty = max(lot * lots_per_order, lot)
