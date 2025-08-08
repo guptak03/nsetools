@@ -158,6 +158,32 @@ class ShoonyaClient:
             retention='DAY', remarks=remarks or 'fno-bot'
         )
 
+    def place_market_sell(self, exch: str, tsym: str, qty: int, prd: str, remarks: str = "") -> Dict:
+        return self.api.place_order(
+            buy_or_sell='S', product_type=prd,
+            exchange=exch, tradingsymbol=tsym,
+            quantity=qty, discloseqty=0, price_type='MKT', price=0.0,
+            retention='DAY', remarks=remarks or 'fno-bot-exit'
+        )
+
+    def get_ltp(self, exch: str, token: Optional[str], tsym: Optional[str]) -> Optional[float]:
+        try:
+            if token:
+                q = self.api.get_quotes(exch, token)
+            else:
+                # fallback if token missing
+                vals = self.search(exch, tsym or "")
+                tok = vals[0].get('token') if vals else None
+                if not tok:
+                    return None
+                q = self.api.get_quotes(exch, tok)
+            if q and q.get('stat') == 'Ok':
+                lp = q.get('lp') or q.get('last_price')
+                return float(lp)
+        except Exception:
+            return None
+        return None
+
 
 # --- Technical indicators on lists ---
 
@@ -297,6 +323,7 @@ def main() -> None:
         # Per-symbol state
         last_bar_time: Dict[str, datetime] = {}
         bought_today: Dict[str, bool] = {s: False for s in contracts}
+        open_positions: Dict[str, Dict] = {}
 
         # Trading window: 09:45 to 15:10 IST
         trading_start = now_ist().replace(hour=9, minute=45, second=0, microsecond=0)
@@ -343,13 +370,14 @@ def main() -> None:
                 # last fully closed bar time
                 prev_bar_ts: datetime = times[-2]
                 if last_bar_time.get(sym) and last_bar_time[sym] >= prev_bar_ts:
-                    continue
+                    # still update exits if position open
+                    pass
 
                 tick = float(info.get('tick_size', 0.05))
                 c1 = condition_prev_low_equals_todays_low(lows, tick)
                 c2 = condition_wr_crossed_up(highs, lows, closes)
                 c3 = condition_rsi_two_ago_below_20(closes)
-                if c1 and c2 and c3:
+                if c1 and c2 and c3 and sym not in open_positions:
                     if trade_segment == 'EQ':
                         prev_high = float(highs[-2])
                         prev_low = float(lows[-2])
@@ -364,12 +392,58 @@ def main() -> None:
                         order = client.place_market_buy(exch, tsym, qty, product_type, remarks='5m-signal')
                         if order and order.get('stat') == 'Ok':
                             print(f"Order Placed: {order.get('norenordno')}")
-                            bought_today[sym] = True
+                            # Capture entry price via LTP as proxy
+                            ltp = client.get_ltp(exch, token, tsym)
+                            entry_price = float(ltp) if ltp else float(closes[-1])
+                            baseline_day_low = float(min(lows))
+                            open_positions[sym] = {
+                                'qty': qty,
+                                'entry_price': entry_price,
+                                'baseline_day_low': baseline_day_low,
+                                'exch': exch,
+                                'tsym': tsym,
+                                'token': token,
+                            }
                         else:
                             print(f"Order Failed: {order}")
                     except Exception as e:
                         print(f"Order Error: {e}")
                 last_bar_time[sym] = prev_bar_ts
+
+                # Exit logic for open positions: TP and SL
+                if sym in open_positions:
+                    pos = open_positions[sym]
+                    ltp = client.get_ltp(exch, token, tsym)
+                    if not ltp:
+                        continue
+                    entry = pos['entry_price']
+                    tp_price = entry * 1.01  # +1%
+                    current_day_low = float(min(lows))
+                    # Take Profit
+                    if ltp >= tp_price:
+                        try:
+                            exit_order = client.place_market_sell(exch, tsym, pos['qty'], product_type, remarks='tp-exit')
+                            if exit_order and exit_order.get('stat') == 'Ok':
+                                print(f"{sym}: TP hit. Sold qty={pos['qty']} at ~{ltp:.2f}")
+                                bought_today[sym] = True
+                                del open_positions[sym]
+                                continue
+                            else:
+                                print(f"{sym}: TP exit failed: {exit_order}")
+                        except Exception as e:
+                            print(f"{sym}: TP exit error: {e}")
+                    # Stoploss: new day's low after entry
+                    if current_day_low < pos['baseline_day_low']:
+                        try:
+                            exit_order = client.place_market_sell(exch, tsym, pos['qty'], product_type, remarks='sl-exit')
+                            if exit_order and exit_order.get('stat') == 'Ok':
+                                print(f"{sym}: New day low. SL exit qty={pos['qty']} at ~{ltp:.2f}")
+                                bought_today[sym] = True
+                                del open_positions[sym]
+                            else:
+                                print(f"{sym}: SL exit failed: {exit_order}")
+                        except Exception as e:
+                            print(f"{sym}: SL exit error: {e}")
 
             time.sleep(poll_interval)
 
