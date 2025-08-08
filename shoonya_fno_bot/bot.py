@@ -30,6 +30,13 @@ except Exception as e1:
             _api_import_error = (e1, e2, e3)
             ApiClass = None
 
+# Optional OAuth helpers
+OAuthApiClass = None
+try:
+    from NorenRestApiPy.api_helper import NorenApi as OAuthApiClass  # type: ignore
+except Exception:
+    pass
+
 IST = pytz.timezone("Asia/Kolkata")
 
 
@@ -70,6 +77,9 @@ class ShoonyaClient:
         app_key = os.getenv("SHOONYA_API_KEY")
         imei = os.getenv("SHOONYA_IMEI")
         totp_secret = os.getenv("SHOONYA_TOTP_SECRET", "").strip()
+        oauth_url = os.getenv("SHOONYA_OAUTH_URL", "").strip()
+        secret_key = os.getenv("SHOONYA_SECRET_KEY", "").strip()
+        auth_code = os.getenv("SHOONYA_AUTH_CODE", "").strip()
 
         if not uid or not pwd:
             raise RuntimeError("Missing SHOONYA_USER or SHOONYA_PASSWORD")
@@ -77,6 +87,26 @@ class ShoonyaClient:
         twoFA = totp_now(totp_secret) if totp_secret else os.getenv("SHOONYA_OTP")
         if not twoFA:
             raise RuntimeError("Provide either SHOONYA_TOTP_SECRET or one-time SHOONYA_OTP in env")
+
+        # Try OAuth path first if provided
+        if oauth_url and secret_key and app_key and OAuthApiClass is not None:
+            try:
+                oauth_api = OAuthApiClass()
+                if not auth_code:
+                    # Just guide user to URL (cannot open browser here)
+                    print("Open OAuth URL in a browser, log in, and paste the 'code' into SHOONYA_AUTH_CODE in .env:")
+                    print(oauth_url)
+                    raise RuntimeError("Missing SHOONYA_AUTH_CODE for OAuth flow")
+                acc_tok, usrid, ref_tok, actid = oauth_api.getAccessToken(auth_code, secret_key, app_key, uid)
+                oauth_api.injectOAuthHeader(acc_tok, uid, actid)
+                # Replace self.api with oauth_api-compatible object if needed
+                self.api = oauth_api  # type: ignore
+                self.uid = uid
+                self.account_id = actid
+                print(f"OAuth login complete for {uid}")
+                return
+            except Exception as e:
+                print(f"OAuth login attempt failed: {e}")
 
         # Try multiple signatures depending on what's available
         attempts = []
