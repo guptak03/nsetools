@@ -497,6 +497,15 @@ def main() -> None:
                     if not ltp:
                         continue
                     entry = pos['entry_price']
+                    # Live P&L update for OPEN position
+                    if sym in trade_log:
+                        live_pnl = float(ltp) - entry
+                        trade_log[sym]['pnl'] = live_pnl
+                        trade_log[sym]['pnl_amount'] = live_pnl * pos['qty']
+                        trade_log[sym]['status'] = 'OPEN'
+                        trade_log[sym]['exit_price'] = None
+                        print_trades_table(trade_log)
+
                     tp_price = entry * 1.01  # +1%
                     current_day_low = float(min(lows))
                     # Take Profit
