@@ -233,6 +233,8 @@ def main() -> None:
         sys.exit(1)
 
     product_type = os.getenv('PRODUCT_TYPE', 'I').upper()
+    trade_segment = os.getenv('TRADE_SEGMENT', 'EQ').upper()
+    qty_per_order = int(os.getenv('QUANTITY_PER_ORDER', '10'))
     lots_per_order = int(os.getenv('LOTS_PER_ORDER', '1'))
     once_per_day = os.getenv('ONCE_PER_DAY', 'true').lower() == 'true'
     poll_interval = int(os.getenv('POLL_INTERVAL_SEC', '20'))
@@ -248,20 +250,45 @@ def main() -> None:
     try:
         # Resolve contracts
         contracts: Dict[str, Dict] = {}
-        for sym in watchlist:
-            res = find_nearest_month_fut(client, sym)
-            if not res:
-                print(f"No FUT contract found for {sym}")
-                continue
-            exch, tsym, info = res
-            info['exch'] = exch
-            info['tsym'] = tsym
-            lot_size = int((info.get('ls') or info.get('lotsize') or 1))
-            tick_size = float((info.get('ti') or info.get('tick_size') or 0.05))
-            info['lot_size'] = lot_size
-            info['tick_size'] = tick_size
-            contracts[sym] = info
-            print(f"{sym} -> {tsym} lot={lot_size} tick={tick_size}")
+        if trade_segment == 'EQ':
+            # Resolve equity symbols on NSE (tradingsymbol usually like RELIANCE-EQ)
+            for sym in watchlist:
+                # search exact equity tsym
+                vals = client.search('NSE', sym)
+                if not vals:
+                    print(f"No EQ found for {sym}")
+                    continue
+                # pick first NSE equity match with -EQ if present
+                chosen = None
+                for v in vals:
+                    tsym = (v.get('tsym') or '').upper()
+                    if tsym.endswith('-EQ') and v.get('exch') == 'NSE':
+                        chosen = v
+                        break
+                if not chosen:
+                    chosen = vals[0]
+                chosen['exch'] = chosen.get('exch', 'NSE')
+                chosen['tsym'] = chosen.get('tsym')
+                # Defaults for tick and lot
+                chosen['lot_size'] = 1
+                chosen['tick_size'] = float(chosen.get('ti') or 0.05)
+                contracts[sym] = chosen
+                print(f"{sym} -> {chosen['tsym']} (EQ)")
+        else:
+            for sym in watchlist:
+                res = find_nearest_month_fut(client, sym)
+                if not res:
+                    print(f"No FUT contract found for {sym}")
+                    continue
+                exch, tsym, info = res
+                info['exch'] = exch
+                info['tsym'] = tsym
+                lot_size = int((info.get('ls') or info.get('lotsize') or 1))
+                tick_size = float((info.get('ti') or info.get('tick_size') or 0.05))
+                info['lot_size'] = lot_size
+                info['tick_size'] = tick_size
+                contracts[sym] = info
+                print(f"{sym} -> {tsym} lot={lot_size} tick={tick_size}")
 
         if not contracts:
             print('No tradable contracts resolved. Exiting.')
@@ -315,8 +342,11 @@ def main() -> None:
                 c2 = condition_wr_crossed_up(highs, lows, closes)
                 c3 = condition_rsi_two_ago_below_20(closes)
                 if c1 and c2 and c3:
-                    lot = int(info.get('lot_size', 1))
-                    qty = max(lot * lots_per_order, lot)
+                    if trade_segment == 'EQ':
+                        qty = max(qty_per_order, 1)
+                    else:
+                        lot = int(info.get('lot_size', 1))
+                        qty = max(lot * lots_per_order, lot)
                     print(f"{sym}: BUY {tsym} qty={qty} @ {now_ist().strftime('%H:%M:%S')} (bar {prev_bar_ts.strftime('%H:%M')})")
                     try:
                         order = client.place_market_buy(exch, tsym, qty, product_type, remarks='5m-signal')
